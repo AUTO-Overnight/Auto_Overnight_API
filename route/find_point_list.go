@@ -5,25 +5,29 @@ import (
 	"auto_overnight_api/functions"
 	"auto_overnight_api/model"
 	"encoding/json"
-	"github.com/aws/aws-lambda-go/events"
+	"github.com/gin-gonic/gin"
+	"io/ioutil"
 	"net/http"
 	"net/http/cookiejar"
 )
 
 // FindPointList 상벌점 내역 조회하여 return
-func FindPointList(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+func FindPointList(c *gin.Context) {
 
 	// 상벌점 내역 조회에 필요한 것들 파싱
 	var requestsModel model.FindRequest
-	err := json.Unmarshal([]byte(request.Body), &requestsModel)
+	value, _ := ioutil.ReadAll(c.Request.Body)
+
+	err := json.Unmarshal(value, &requestsModel)
+
 	if err != nil {
-		return custom_err.MakeErrorResponse(custom_err.ParsingJsonBodyErr, 500)
+		c.JSON(http.StatusInternalServerError, custom_err.ParsingJsonBodyErr)
 	}
 
 	// cookie jar 생성
 	jar, err := cookiejar.New(nil)
 	if err != nil {
-		return custom_err.MakeErrorResponse(custom_err.MakeCookieJarErr, 500)
+		c.JSON(http.StatusInternalServerError, custom_err.MakeCookieJarErr)
 	}
 
 	// cookie jar에 세션 설정
@@ -38,11 +42,11 @@ func FindPointList(request events.APIGatewayProxyRequest) (events.APIGatewayProx
 	studentInfo := functions.RequestFindUserNm(client)
 
 	if studentInfo.Error != nil {
-		return custom_err.MakeErrorResponse(err, 500)
+		c.JSON(http.StatusInternalServerError, err)
 	}
 
 	if studentInfo.XML.Parameters.Parameter == "-600" {
-		return custom_err.MakeErrorResponse(custom_err.WrongCookieErr, 400)
+		c.JSON(http.StatusBadRequest, custom_err.WrongCookieErr)
 	}
 
 	requestInfo := model.RequestInfo{
@@ -55,26 +59,19 @@ func FindPointList(request events.APIGatewayProxyRequest) (events.APIGatewayProx
 	// 상벌점 내역 조회
 	pointList := functions.RequestFindPointList(client, requestInfo)
 	if err != nil {
-		return custom_err.MakeErrorResponse(err, 500)
+		c.JSON(http.StatusInternalServerError, err)
 	}
-
-	// 응답 위한 json body 만들기
-	responseBody := make(map[string]interface{})
 
 	// 파싱 시작
 	pm := functions.ParsingPointList(pointList)
+
+	// 응답 구조체 만들기
+	responseBody := make(map[string]interface{})
 
 	responseBody["cmpScr"] = pm.CmpScr
 	responseBody["lifSstArdGbn"] = pm.LifSstArdGbn
 	responseBody["ardInptDt"] = pm.ArdInptDt
 	responseBody["lifSstArdCtnt"] = pm.LifSstArdCtnt
 
-	// 응답 json 만들기
-	responseJson, _ := json.Marshal(responseBody)
-	response := events.APIGatewayProxyResponse{
-		StatusCode: 200,
-		Body:       string(responseJson),
-	}
-
-	return response, nil
+	c.JSON(http.StatusOK, responseBody)
 }

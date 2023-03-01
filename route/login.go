@@ -7,30 +7,33 @@ import (
 	"auto_overnight_api/model"
 	"bytes"
 	"encoding/json"
-	"github.com/aws/aws-lambda-go/events"
+	"github.com/gin-gonic/gin"
+	"io/ioutil"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 )
 
 // Login Id와 Password를 Json으로 입력 받아 로그인하고 이름, 년도, 학기, 쿠키, 외박 신청 내역을 return
-func Login(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+func Login(c *gin.Context) {
 
 	// Id, Password 파싱
 	var requestsModel model.LoginRequest
-	err := json.Unmarshal([]byte(request.Body), &requestsModel)
+	value, _ := ioutil.ReadAll(c.Request.Body)
+
+	err := json.Unmarshal(value, &requestsModel)
 
 	if err != nil {
-		return custom_err.MakeErrorResponse(custom_err.ParsingJsonBodyErr, 500)
+		c.JSON(http.StatusInternalServerError, custom_err.ParsingJsonBodyErr)
 	}
 	if requestsModel.Id == "" || requestsModel.PassWord == "" {
-		return custom_err.MakeErrorResponse(custom_err.EmptyIdOrPasswordErr, 400)
+		c.JSON(http.StatusBadRequest, custom_err.EmptyIdOrPasswordErr)
 	}
 
 	// PassWord URIDecode
 	decodeValue, err := url.QueryUnescape(requestsModel.PassWord)
 	if err != nil {
-		return custom_err.MakeErrorResponse(custom_err.ParsingJsonBodyErr, 500)
+		c.JSON(http.StatusInternalServerError, custom_err.ParsingJsonBodyErr)
 	}
 
 	// x-www-form-urlencoded 방식으로 로그인 하기 위해 form 생성
@@ -43,13 +46,13 @@ func Login(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespons
 	// cookie jar 생성
 	jar, err := cookiejar.New(nil)
 	if err != nil {
-		return custom_err.MakeErrorResponse(custom_err.MakeCookieJarErr, 500)
+		c.JSON(http.StatusInternalServerError, custom_err.MakeCookieJarErr)
 	}
 
 	// 로그인 http request 생성
 	req, err := http.NewRequest("POST", config.LoginUrl, bytes.NewBufferString(loginInfo.Encode()))
 	if err != nil {
-		return custom_err.MakeErrorResponse(custom_err.MakeHttpRequestErr, 500)
+		c.JSON(http.StatusInternalServerError, custom_err.MakeHttpRequestErr)
 	}
 
 	// Content-Type 헤더 설정, client에 cookie jar 설정
@@ -60,7 +63,7 @@ func Login(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespons
 	// 로그인 시도
 	res, err := client.Do(req)
 	if err != nil {
-		return custom_err.MakeErrorResponse(custom_err.SendHttpRequestErr, 500)
+		c.JSON(http.StatusInternalServerError, custom_err.SendHttpRequestErr)
 	}
 
 	defer res.Body.Close()
@@ -69,12 +72,12 @@ func Login(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespons
 	req, err = http.NewRequest("GET", config.SessionUrl, nil)
 
 	if err != nil {
-		return custom_err.MakeErrorResponse(custom_err.MakeHttpRequestErr, 500)
+		c.JSON(http.StatusInternalServerError, custom_err.MakeHttpRequestErr)
 	}
 
 	res, err = client.Do(req)
 	if err != nil {
-		return custom_err.MakeErrorResponse(custom_err.SendHttpRequestErr, 500)
+		c.JSON(http.StatusInternalServerError, custom_err.SendHttpRequestErr)
 	}
 
 	// 파싱 시작
@@ -82,11 +85,11 @@ func Login(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespons
 	yytmGbnInfo := functions.RequestFindYYtmgbn(client)
 
 	if studentInfo.Error != nil || yytmGbnInfo.Error != nil {
-		return custom_err.MakeErrorResponse(err, 500)
+		c.JSON(http.StatusInternalServerError, err)
 	}
 
 	if studentInfo.XML.Parameters.Parameter == "-600" {
-		return custom_err.MakeErrorResponse(custom_err.WrongIdOrPasswordErr, 400)
+		c.JSON(http.StatusBadRequest, custom_err.WrongIdOrPasswordErr)
 	}
 
 	requestInfo := model.RequestInfo{
@@ -100,10 +103,14 @@ func Login(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespons
 	stayOutList := functions.RequestFindStayOutList(client, requestInfo)
 
 	if stayOutList.Error != nil {
-		return custom_err.MakeErrorResponse(err, 500)
+		c.JSON(http.StatusInternalServerError, err)
 	}
 
-	// 응답 위한 json body 선언
+	// 파싱 시작
+	sm := functions.ParsingStayoutList(stayOutList)
+	cookie := functions.ParsingCookies(client)
+
+	// 응답 구조체 만들기
 	responseBody := make(map[string]interface{})
 
 	// 이름, 년도, 학기 저장
@@ -111,23 +118,10 @@ func Login(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespons
 	responseBody["yy"] = yytmGbnInfo.XML.Dataset[0].Rows.Row[0].Col[0].Data
 	responseBody["tmGbn"] = yytmGbnInfo.XML.Dataset[0].Rows.Row[0].Col[1].Data
 
-	// 파싱 시작
-	sm := functions.ParsingStayoutList(stayOutList)
-	cookie := functions.ParsingCookies(client)
-
 	responseBody["cookies"] = cookie
 	responseBody["outStayFrDt"] = sm.OutStayFrDt
 	responseBody["outStayToDt"] = sm.OutStayToDt
 	responseBody["outStayStGbn"] = sm.OutStayStGbn
 
-	// 응답 json 만들기
-	responseJson, err := json.Marshal(responseBody)
-	if err != nil {
-		return custom_err.MakeErrorResponse(custom_err.MakeJsonBodyErr, 500)
-	}
-	response := events.APIGatewayProxyResponse{
-		StatusCode: 200,
-		Body:       string(responseJson),
-	}
-	return response, nil
+	c.JSON(http.StatusOK, responseBody)
 }
