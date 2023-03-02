@@ -3,6 +3,8 @@ package main
 import (
 	"auto_overnight_api/route"
 	"github.com/gin-gonic/gin"
+	"net/http"
+	"time"
 )
 
 func main() {
@@ -13,5 +15,11 @@ func main() {
 	r.POST("/find/stayout", route.FindStayOutList)
 	r.POST("/find/point", route.FindPointList)
 
-	r.Run(":8081")
+	srv := &http.Server{
+		Addr:         ":8081",
+		Handler:      r,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+	srv.ListenAndServe()
 }
